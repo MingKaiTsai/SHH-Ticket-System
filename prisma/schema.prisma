@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  APPLICANT
+  MEDIA
+  LEAD
+  APPROVER
+}
+
+enum TicketStatus {
+  PENDING
+  IN_PROGRESS
+  PROOFING
+  WAITING_REPLY
+  DONE
+}
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  name      String
+  role      UserRole
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tickets   Ticket[] @relation("ApplicantTickets")
+  assigned  Ticket[] @relation("AssignedTickets")
+}
+
+model Ticket {
+  id             String       @id @default(cuid())
+  code           String       @unique
+  unit           String
+  applicantName  String
+  roleType       String
+  ext            String
+  purpose        String
+  category       String
+  status         TicketStatus @default(PENDING)
+  assignedToName String?
+  applicantId    String
+  applicant      User         @relation("ApplicantTickets", fields: [applicantId], references: [id])
+  assignedToId   String?
+  assignedTo     User?        @relation("AssignedTickets", fields: [assignedToId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  statusHistory  TicketStatusHistory[]
+}
+
+model TicketStatusHistory {
+  id        String       @id @default(cuid())
+  ticketId  String
+  ticket    Ticket       @relation(fields: [ticketId], references: [id])
+  from      TicketStatus
+  to        TicketStatus
+  note      String?
+  createdAt DateTime     @default(now())
+}
