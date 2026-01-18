@@ -1,36 +1,39 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SHH Ticket System (Demo)
+
+Demo-only request management dashboard built with Next.js. This version runs
+entirely in the browser using localStorage (no backend), designed for portfolio
+and live demos.
+
+## Features
+- Multi-role dashboard: applicant, approver, lead, media A/B/C.
+- Ticket lifecycle: submit, approve/return, assign, status updates.
+- Rich detail view with size fields and description truncation/expand.
+- Search, filter, sort, and CSV export (lead role).
+- Responsive layouts for desktop and mobile.
+
+## Tech Stack
+- Next.js (App Router) + TypeScript
+- LocalStorage for demo persistence
+- Custom CSS (no UI framework)
 
 ## Getting Started
-
-First, run the development server:
-
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
+Open http://localhost:3000
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Demo Data
+Demo tickets are loaded from localStorage on first run and then persisted.
+To reset demo data, clear the `reqsysTickets` key in localStorage.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Roles
+Role switching is built in for demo purposes:
+- applicant / applicant-int
+- approver / approver-int
+- lead
+- media-a / media-b / media-c
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes
+This project is a static demo. It does not require a backend and does not
+connect to a database. All changes are stored in the current browser only.
