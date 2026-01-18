@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { demoTickets } from "@/lib/demo-data";
 
@@ -13,6 +13,10 @@ type Ticket = {
   ext: string;
   purpose: string;
   category: string;
+  description?: string;
+  posterSize?: string;
+  posterCustomSize?: string;
+  flatSize?: string;
   status: string;
   assignedToName?: string | null;
   applicantId?: string;
@@ -43,6 +47,7 @@ const headers = [
   { key: "ext", label: "分機" },
   { key: "purpose", label: "主要用途" },
   { key: "category", label: "申請類別" },
+  { key: "sizeDisplay", label: "成品尺寸" },
   { key: "status", label: "狀態" },
   { key: "assignedToName", label: "指派設計師" },
 ];
@@ -71,6 +76,16 @@ const roleAssigneeMap: Record<string, string> = {
   "media-c": "設計師 黃OO",
 };
 
+const unitRoleTypeMap: Record<string, string> = {
+  護理部: "護理",
+  內科: "內科",
+};
+
+const unitApplicantsMap: Record<string, string[]> = {
+  護理部: ["林小姐", "王小姐", "徐小姐"],
+  內科: ["陳醫師", "張醫師", "李醫師"],
+};
+
 export default function DashboardPage() {
   const router = useRouter();
   const [isHydrated, setIsHydrated] = useState(false);
@@ -89,11 +104,24 @@ export default function DashboardPage() {
   const [busyItems, setBusyItems] = useState<Record<string, boolean>>({});
   const [toastMessage, setToastMessage] = useState("");
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [expandedDescriptions, setExpandedDescriptions] = useState<
+    Record<string, boolean>
+  >({});
   const [isNewTicketOpen, setIsNewTicketOpen] = useState(false);
   const [isNewTicketBusy, setIsNewTicketBusy] = useState(false);
   const [editingTicketId, setEditingTicketId] = useState<string | null>(null);
   const [isActiveExpanded, setIsActiveExpanded] = useState(false);
   const [isReturnExpanded, setIsReturnExpanded] = useState(false);
+  const [confirmModal, setConfirmModal] = useState({
+    open: false,
+    title: "",
+    message: "",
+  });
+  const confirmActionRef = useRef<null | (() => void)>(null);
+  const [isApproverPendingExpanded, setIsApproverPendingExpanded] =
+    useState(false);
+  const [isApproverActiveExpanded, setIsApproverActiveExpanded] =
+    useState(false);
   const [newTicketForm, setNewTicketForm] = useState({
     unit: "",
     applicantName: "",
@@ -101,7 +129,12 @@ export default function DashboardPage() {
     ext: "",
     purpose: "",
     category: "",
+    posterSize: "",
+    posterCustomSize: "",
+    flatSize: "",
     description: "",
+    status: "PENDING",
+    assignedToName: "",
   });
 
   useEffect(() => {
@@ -168,6 +201,15 @@ export default function DashboardPage() {
     return [];
   }, [tickets, role]);
 
+  const approverActiveTickets = useMemo(() => {
+    if (role === "approver" || role === "approver-int") {
+      return approverUnitTickets.filter((ticket) =>
+        ["IN_PROGRESS", "PROOFING", "WAITING_REPLY"].includes(ticket.status)
+      );
+    }
+    return [];
+  }, [approverUnitTickets, role]);
+
 
   const scopedTickets = useMemo(() => {
     if (role === "applicant" || role === "applicant-int") {
@@ -187,16 +229,26 @@ export default function DashboardPage() {
     return tickets;
   }, [tickets, role]);
 
-  const leadTodoTickets = useMemo(() => {
+  const leadAssignTickets = useMemo(() => {
     if (role !== "lead") {
       return [];
     }
-    return tickets.filter((ticket) => {
-      const isDone = ticket.status === "DONE";
-      const isPending = ticket.status === "PENDING";
-      const isUnassigned = !ticket.assignedToName;
-      return !isDone && (isPending || isUnassigned);
-    });
+    return tickets.filter(
+      (ticket) =>
+        ticket.status === "PENDING" ||
+        (ticket.status === "IN_PROGRESS" && !ticket.assignedToName)
+    );
+  }, [tickets, role]);
+
+  const leadInProgressTickets = useMemo(() => {
+    if (role !== "lead") {
+      return [];
+    }
+    return tickets.filter(
+      (ticket) =>
+        ["IN_PROGRESS", "PROOFING", "WAITING_REPLY"].includes(ticket.status) &&
+        Boolean(ticket.assignedToName)
+    );
   }, [tickets, role]);
 
   const filteredTickets = useMemo(() => {
@@ -235,8 +287,14 @@ export default function DashboardPage() {
   const sortedTickets = useMemo(() => {
     const list = [...filteredTickets];
     list.sort((a, b) => {
-      const aValue = String(a[sortKey as keyof Ticket] ?? "");
-      const bValue = String(b[sortKey as keyof Ticket] ?? "");
+      const aValue =
+        sortKey === "sizeDisplay"
+          ? getSizeLabel(a)
+          : String(a[sortKey as keyof Ticket] ?? "");
+      const bValue =
+        sortKey === "sizeDisplay"
+          ? getSizeLabel(b)
+          : String(b[sortKey as keyof Ticket] ?? "");
       const direction = sortDirection === "asc" ? 1 : -1;
       return aValue.localeCompare(bValue, "zh-Hant") * direction;
     });
@@ -246,8 +304,14 @@ export default function DashboardPage() {
   const allSortedTickets = useMemo(() => {
     const list = [...allFilteredTickets];
     list.sort((a, b) => {
-      const aValue = String(a[sortKey as keyof Ticket] ?? "");
-      const bValue = String(b[sortKey as keyof Ticket] ?? "");
+      const aValue =
+        sortKey === "sizeDisplay"
+          ? getSizeLabel(a)
+          : String(a[sortKey as keyof Ticket] ?? "");
+      const bValue =
+        sortKey === "sizeDisplay"
+          ? getSizeLabel(b)
+          : String(b[sortKey as keyof Ticket] ?? "");
       const direction = sortDirection === "asc" ? 1 : -1;
       return aValue.localeCompare(bValue, "zh-Hant") * direction;
     });
@@ -300,26 +364,21 @@ export default function DashboardPage() {
 
   const openNewTicketModal = () => {
     const unit = roleUnitMap[role] ?? "";
-    const applicantName =
-      role === "applicant"
-        ? "林小姐"
-        : role === "applicant-int"
-          ? "陳醫師"
-          : "";
-    const roleType =
-      role === "applicant"
-        ? "護理"
-        : role === "applicant-int"
-          ? "內科"
-          : "";
+    const applicantName = "";
+    const roleType = unitRoleTypeMap[unit] ?? "";
     setNewTicketForm({
       unit,
       applicantName,
       roleType,
-      ext: role === "applicant" ? "2211" : role === "applicant-int" ? "4501" : "",
-      purpose: "校院活動",
-      category: "海報輸出",
-      description: "需求重點：請依照範例提供標準尺寸與輸出規格。",
+      ext: "",
+      purpose: "",
+      category: "",
+      posterSize: "",
+      posterCustomSize: "",
+      flatSize: "",
+      description: "",
+      status: "PENDING",
+      assignedToName: "",
     });
     setEditingTicketId(null);
     setIsNewTicketOpen(true);
@@ -329,11 +388,16 @@ export default function DashboardPage() {
     setNewTicketForm({
       unit: ticket.unit,
       applicantName: ticket.applicantName,
-      roleType: ticket.roleType,
+      roleType: unitRoleTypeMap[ticket.unit] ?? ticket.roleType,
       ext: ticket.ext,
       purpose: ticket.purpose,
       category: ticket.category,
+      posterSize: ticket.posterSize ?? "",
+      posterCustomSize: ticket.posterCustomSize ?? "",
+      flatSize: ticket.flatSize ?? "",
       description: "需求更新：請補充必要資訊後重新送出。",
+      status: ticket.status ?? "PENDING",
+      assignedToName: ticket.assignedToName ?? "",
     });
     setEditingTicketId(ticket.id);
     setIsNewTicketOpen(true);
@@ -346,46 +410,85 @@ export default function DashboardPage() {
     setNewTicketForm((prev) => ({ ...prev, [field]: value }));
   };
 
+  const handleAutoFill = () => {
+    const applicants = unitApplicantsMap[newTicketForm.unit] ?? [];
+    setNewTicketForm((prev) => ({
+      ...prev,
+      applicantName: applicants[0] ?? prev.applicantName,
+      roleType: unitRoleTypeMap[newTicketForm.unit] ?? prev.roleType,
+      ext: prev.ext || (newTicketForm.unit === "護理部" ? "2211" : "4501"),
+      purpose: prev.purpose || "校院活動",
+      category: prev.category || "海報輸出",
+      posterSize: prev.posterSize || "A1",
+      flatSize: prev.flatSize,
+      description:
+        prev.description ||
+        "A1海報三張，本週五衛教活動宣傳使用。",
+    }));
+  };
+
+  const applicantOptions = useMemo(() => {
+    if (!newTicketForm.unit) {
+      return [];
+    }
+    return unitApplicantsMap[newTicketForm.unit] ?? [];
+  }, [newTicketForm.unit]);
+
   const handleNewTicketSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (isNewTicketBusy) {
       return;
     }
-    setIsNewTicketBusy(true);
-    const editingTicket = editingTicketId
-      ? tickets.find((ticket) => ticket.id === editingTicketId)
-      : null;
-    const codeSuffix = Math.floor(1000 + Math.random() * 9000);
-    const code = `E170-2025-${codeSuffix}`;
-    const localTicket: Ticket = {
-      id: editingTicketId ?? `local-${Date.now()}`,
-      code: editingTicket?.code ?? code,
-      unit: newTicketForm.unit,
-      applicantName: newTicketForm.applicantName,
-      roleType: newTicketForm.roleType,
-      ext: newTicketForm.ext,
-      purpose: newTicketForm.purpose,
-      category: newTicketForm.category,
-      status: editingTicket?.status ?? "PENDING",
-      assignedToName: editingTicket?.assignedToName ?? null,
-    };
+    openConfirm(
+      editingTicketId ? "確認送出修改並重新送審？" : "確認送出申請？",
+      () => {
+        setIsNewTicketBusy(true);
+        const editingTicket = editingTicketId
+          ? tickets.find((ticket) => ticket.id === editingTicketId)
+          : null;
+        const codeSuffix = Math.floor(1000 + Math.random() * 9000);
+        const code = `E170-2025-${codeSuffix}`;
+        const localTicket: Ticket = {
+          id: editingTicketId ?? `local-${Date.now()}`,
+          code: editingTicket?.code ?? code,
+          unit: newTicketForm.unit,
+          applicantName: newTicketForm.applicantName,
+          roleType: newTicketForm.roleType,
+          ext: newTicketForm.ext,
+          purpose: newTicketForm.purpose,
+          category: newTicketForm.category,
+          description: newTicketForm.description || undefined,
+          posterSize: newTicketForm.posterSize || undefined,
+          posterCustomSize: newTicketForm.posterCustomSize || undefined,
+          flatSize: newTicketForm.flatSize || undefined,
+          status:
+            role === "lead" && editingTicketId
+              ? newTicketForm.status || "PENDING"
+              : editingTicket?.status ?? "PENDING",
+          assignedToName:
+            role === "lead" && editingTicketId
+              ? newTicketForm.assignedToName || null
+              : editingTicket?.assignedToName ?? null,
+        };
 
-    setTickets((prev) => {
-      if (editingTicketId) {
-        return prev.map((ticket) =>
-          ticket.id === editingTicketId ? localTicket : ticket
+        setTickets((prev) => {
+          if (editingTicketId) {
+            return prev.map((ticket) =>
+              ticket.id === editingTicketId ? localTicket : ticket
+            );
+          }
+          return [localTicket, ...prev];
+        });
+        setToastMessage(
+          editingTicketId
+            ? "修改已確認，請再送出審核"
+            : "申請已送出，請盡快請主管審核"
         );
+        setIsNewTicketOpen(false);
+        setIsNewTicketBusy(false);
+        setEditingTicketId(null);
       }
-      return [localTicket, ...prev];
-    });
-    setToastMessage(
-      editingTicketId
-        ? "修改已確認，請再送出審核"
-        : "申請已送出，請盡快請主管審核"
     );
-    setIsNewTicketOpen(false);
-    setIsNewTicketBusy(false);
-    setEditingTicketId(null);
   };
 
   const handleStatusDraft = (ticketId: string, nextStatus: string) => {
@@ -453,17 +556,25 @@ export default function DashboardPage() {
     setBusyItems((prev) => ({ ...prev, [ticketId]: false }));
   };
 
+  const handleApprovalConfirm = (ticketId: string, nextStatus: string) => {
+    const message =
+      nextStatus === "IN_PROGRESS" ? "確認核准這筆案件？" : "確認退回這筆案件？";
+    openConfirm(message, () => handleApproval(ticketId, nextStatus));
+  };
+
   const handleApplicantResubmit = (ticketId: string) => {
-    setBusyItems((prev) => ({ ...prev, [ticketId]: true }));
-    setTickets((prev) =>
-      prev.map((ticket) =>
-        ticket.id === ticketId
-          ? { ...ticket, status: "PENDING", assignedToName: null }
-          : ticket
-      )
-    );
-    setToastMessage("申請已送出，請盡快請主管審核");
-    setBusyItems((prev) => ({ ...prev, [ticketId]: false }));
+    openConfirm("確認送出審核？", () => {
+      setBusyItems((prev) => ({ ...prev, [ticketId]: true }));
+      setTickets((prev) =>
+        prev.map((ticket) =>
+          ticket.id === ticketId
+            ? { ...ticket, status: "PENDING", assignedToName: null }
+            : ticket
+        )
+      );
+      setToastMessage("申請已送出，請盡快請主管審核");
+      setBusyItems((prev) => ({ ...prev, [ticketId]: false }));
+    });
   };
 
   const getAssigneeLabel = (ticket: Ticket) => {
@@ -473,20 +584,260 @@ export default function DashboardPage() {
     return ticket.assignedToName || "未指派";
   };
 
+  const getSizeLabel = (ticket: Ticket) => {
+    if (ticket.category === "海報輸出") {
+      return ticket.posterCustomSize || ticket.posterSize || "未填";
+    }
+    if (ticket.category === "平面設計") {
+      return ticket.flatSize || "未填";
+    }
+    return "未填";
+  };
+
+  const DESCRIPTION_LIMIT = 120;
+
+  const renderDescription = (ticket: Ticket) => {
+    const text = ticket.description?.trim() ?? "";
+    const isExpanded = Boolean(expandedDescriptions[ticket.id]);
+    const isTruncated = text.length > DESCRIPTION_LIMIT;
+    const preview =
+      !text
+        ? "未填"
+        : isExpanded || !isTruncated
+        ? text
+        : `${text.slice(0, DESCRIPTION_LIMIT)}…`;
+
+    return (
+      <div className="detail-note">
+        <p className="detail-label">內容說明</p>
+        <p className="detail-value">{preview}</p>
+        {isTruncated ? (
+          <button
+            className="text-link"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setExpandedDescriptions((prev) => ({
+                ...prev,
+                [ticket.id]: !prev[ticket.id],
+              }));
+            }}
+          >
+            {isExpanded ? "收合內容" : "顯示完整內容"}
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+
+  const openConfirm = (
+    message: string,
+    onConfirm: () => void,
+    title = "請確認"
+  ) => {
+    confirmActionRef.current = onConfirm;
+    setConfirmModal({ open: true, title, message });
+  };
+
+  const closeConfirm = () => {
+    confirmActionRef.current = null;
+    setConfirmModal({ open: false, title: "", message: "" });
+  };
+
+  const handleConfirm = () => {
+    const action = confirmActionRef.current;
+    closeConfirm();
+    if (action) {
+      action();
+    }
+  };
+
+  const renderMediaCaseList = (list: Ticket[], limit = 6) => (
+    <div className="case-list capped-list">
+      {list.slice(0, limit).map((ticket) => {
+        const draftStatus = statusDrafts[ticket.id] ?? ticket.status;
+        const draftAssignee =
+          assigneeDrafts[ticket.id] ?? ticket.assignedToName ?? "";
+        const hasChanges =
+          draftStatus !== ticket.status ||
+          draftAssignee !== (ticket.assignedToName ?? "");
+        const updated = updatedFlags[ticket.id];
+        const isPendingApproval = ticket.status === "PENDING";
+        const isBusy = busyItems[ticket.id];
+
+        return (
+          <details
+            key={ticket.id}
+            className="case-item"
+            data-status={statusLabels[ticket.status] || ticket.status}
+          >
+            <summary className="case-summary">
+              <div>
+                <p className="item-title">
+                  {ticket.code}｜{ticket.category}
+                </p>
+                <p className="item-note">
+                  {ticket.unit}｜{ticket.purpose}
+                </p>
+              </div>
+              {role === "lead" ? (
+                <>
+                  <div className="assign-control">
+                    <select
+                      className="assign-select"
+                      value={draftAssignee}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) =>
+                        handleAssigneeDraft(ticket.id, event.target.value)
+                      }
+                      disabled={isPendingApproval || isBusy}
+                      title={isPendingApproval ? "待審核不能指派" : ""}
+                    >
+                      <option value="">未指派</option>
+                      <option value="設計師 蔡OO">設計師 蔡OO</option>
+                      <option value="設計師 李OO">設計師 李OO</option>
+                      <option value="設計師 黃OO">設計師 黃OO</option>
+                    </select>
+                  </div>
+                  <button
+                    className="status-confirm"
+                    type="button"
+                    disabled={isPendingApproval || isBusy}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleApplyWithBusy(ticket.id);
+                    }}
+                    title={isPendingApproval ? "待審核不能指派" : ""}
+                  >
+                    {isBusy ? (
+                      <>
+                        <span className="inline-spinner" />
+                        更新中
+                      </>
+                    ) : updated ? (
+                      "已更新"
+                    ) : (
+                      "確認"
+                    )}
+                  </button>
+                  {isPendingApproval ? (
+                    <span className="status-badge">待審核</span>
+                  ) : null}
+                </>
+              ) : role === "media-a" ||
+                role === "media-b" ||
+                role === "media-c" ? (
+                <div className="status-control">
+                  <select
+                    className="status-select"
+                    value={draftStatus}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) =>
+                      handleStatusDraft(ticket.id, event.target.value)
+                    }
+                    disabled={isPendingApproval || isBusy}
+                    title={isPendingApproval ? "待審核不能指派" : ""}
+                  >
+                    <option value="PENDING">待確認</option>
+                    <option value="IN_PROGRESS">製作中</option>
+                    <option value="PROOFING">校稿中</option>
+                    <option value="WAITING_REPLY">待回覆</option>
+                    <option value="DONE">已完成</option>
+                  </select>
+                  <button
+                    className="status-confirm"
+                    type="button"
+                    disabled={isPendingApproval || isBusy}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleApplyWithBusy(ticket.id);
+                    }}
+                    title={isPendingApproval ? "待審核不能指派" : ""}
+                  >
+                    {isBusy ? (
+                      <>
+                        <span className="inline-spinner" />
+                        更新中
+                      </>
+                    ) : updated ? (
+                      "已更新"
+                    ) : (
+                      "確認"
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <span className="status-badge">
+                  {statusLabels[ticket.status] || ticket.status}
+                </span>
+              )}
+              {role === "lead" ? null : (
+                <span className="assign-badge">{getAssigneeLabel(ticket)}</span>
+              )}
+            </summary>
+            <div className="case-detail">
+              <div className="detail-grid">
+                <div>
+                  <p className="detail-label">申請單位</p>
+                  <p className="detail-value">{ticket.unit}</p>
+                </div>
+                <div>
+                  <p className="detail-label">申請人</p>
+                  <p className="detail-value">{ticket.applicantName}</p>
+                </div>
+                <div>
+                  <p className="detail-label">職類</p>
+                  <p className="detail-value">{ticket.roleType}</p>
+                </div>
+                <div>
+                  <p className="detail-label">分機</p>
+                  <p className="detail-value">{ticket.ext}</p>
+                </div>
+                <div>
+                  <p className="detail-label">指派設計師</p>
+                  <p className="detail-value">{getAssigneeLabel(ticket)}</p>
+                </div>
+              </div>
+              <div className="detail-grid">
+                <div>
+                  <p className="detail-label">主要用途</p>
+                  <p className="detail-value">{ticket.purpose}</p>
+                </div>
+                <div>
+                  <p className="detail-label">申請類別</p>
+                  <p className="detail-value">{ticket.category}</p>
+                </div>
+                {(ticket.category === "海報輸出" ||
+                  ticket.category === "平面設計") && (
+                  <div>
+                    <p className="detail-label">成品尺寸</p>
+                    <p className="detail-value">{getSizeLabel(ticket)}</p>
+                  </div>
+                )}
+              </div>
+              {renderDescription(ticket)}
+            </div>
+          </details>
+        );
+      })}
+    </div>
+  );
+
   const handleApplyWithBusy = (ticketId: string) => {
-    setBusyItems((prev) => ({ ...prev, [ticketId]: true }));
-    handleApplyChanges(ticketId);
+    openConfirm("確認更新狀態與指派？", () => {
+      setBusyItems((prev) => ({ ...prev, [ticketId]: true }));
+      handleApplyChanges(ticketId);
+    });
   };
 
   const handleDeleteTicket = (ticketId: string) => {
-    if (!window.confirm("確定要刪除這筆案件嗎？")) {
-      return;
-    }
-    setBusyItems((prev) => ({ ...prev, [ticketId]: true }));
-    setTickets((prev) => prev.filter((ticket) => ticket.id !== ticketId));
-    setSelectedTicket(null);
-    setToastMessage("案件已刪除");
-    setBusyItems((prev) => ({ ...prev, [ticketId]: false }));
+    openConfirm("確定要刪除這筆案件嗎？", () => {
+      setBusyItems((prev) => ({ ...prev, [ticketId]: true }));
+      setTickets((prev) => prev.filter((ticket) => ticket.id !== ticketId));
+      setSelectedTicket(null);
+      setToastMessage("案件已刪除");
+      setBusyItems((prev) => ({ ...prev, [ticketId]: false }));
+    });
   };
 
   const handleExportCsv = () => {
@@ -499,6 +850,7 @@ export default function DashboardPage() {
       ticket.ext,
       ticket.purpose,
       ticket.category,
+      getSizeLabel(ticket),
       statusLabels[ticket.status] || ticket.status,
       getAssigneeLabel(ticket),
     ]);
@@ -595,13 +947,14 @@ export default function DashboardPage() {
                   <td>{ticket.ext}</td>
                   <td>{ticket.purpose}</td>
                   <td>{ticket.category}</td>
+                  <td>{getSizeLabel(ticket)}</td>
                   <td>{statusLabels[ticket.status] || ticket.status}</td>
                   <td>{getAssigneeLabel(ticket)}</td>
                 </tr>
               ))}
               {allSortedTickets.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>無符合條件的案件</td>
+                  <td colSpan={10}>無符合條件的案件</td>
                 </tr>
               ) : null}
             </tbody>
@@ -624,7 +977,7 @@ export default function DashboardPage() {
           </div>
           <div className="header-actions">
             <label className="role-switch">
-              <span>角色切換</span>
+              <span>Demo用角色切換</span>
               <select
                 value={role}
                 onChange={(event) => handleRoleChange(event.target.value)}
@@ -653,15 +1006,34 @@ export default function DashboardPage() {
       </header>
 
       <main className="container dashboard">
+        {confirmModal.open ? (
+          <div className="confirm-overlay" onClick={closeConfirm}>
+            <div
+              className="confirm-modal"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h4>{confirmModal.title}</h4>
+              <p>{confirmModal.message}</p>
+              <div className="confirm-actions">
+                <button className="ghost-btn" type="button" onClick={closeConfirm}>
+                  取消
+                </button>
+                <button className="primary-btn" type="button" onClick={handleConfirm}>
+                  確認
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {toastMessage ? (
           <div
-            className="toast-overlay"
+            className="confirm-overlay"
             role="status"
             aria-live="polite"
             onClick={() => setToastMessage("")}
           >
             <div
-              className="toast-modal"
+              className="confirm-modal"
               onClick={(event) => event.stopPropagation()}
             >
               <p>{toastMessage}</p>
@@ -686,13 +1058,27 @@ export default function DashboardPage() {
             >
               <div className="detail-modal-head">
                 <h4>案件細節</h4>
-                <button
-                  className="ghost-btn"
-                  type="button"
-                  onClick={() => setSelectedTicket(null)}
-                >
-                  關閉
-                </button>
+                <div className="detail-modal-actions">
+                  {role === "lead" ? (
+                    <button
+                      className="ghost-btn"
+                      type="button"
+                      onClick={() => {
+                        openEditTicketModal(selectedTicket);
+                        setSelectedTicket(null);
+                      }}
+                    >
+                      編輯案件
+                    </button>
+                  ) : null}
+                  <button
+                    className="ghost-btn"
+                    type="button"
+                    onClick={() => setSelectedTicket(null)}
+                  >
+                    關閉
+                  </button>
+                </div>
               </div>
               <div className="detail-modal-grid">
                 <div>
@@ -724,6 +1110,10 @@ export default function DashboardPage() {
                   <p className="detail-value">{selectedTicket.category}</p>
                 </div>
                 <div>
+                  <p className="detail-label">成品尺寸</p>
+                  <p className="detail-value">{getSizeLabel(selectedTicket)}</p>
+                </div>
+                <div>
                   <p className="detail-label">狀態</p>
                   <p className="detail-value">
                     {statusLabels[selectedTicket.status] ||
@@ -737,6 +1127,7 @@ export default function DashboardPage() {
                   </p>
                 </div>
               </div>
+              {renderDescription(selectedTicket)}
             </div>
           </div>
         ) : null}
@@ -760,56 +1151,60 @@ export default function DashboardPage() {
                 </button>
               </div>
               <form className="form-grid" onSubmit={handleNewTicketSubmit}>
-                <label>
-                  <span>申請單位</span>
-                  <input
-                    type="text"
-                    placeholder="輸入單位"
-                    value={newTicketForm.unit}
-                    onChange={(event) =>
-                      handleNewTicketChange("unit", event.target.value)
-                    }
-                    required
-                  />
-                </label>
-                <label>
-                  <span>申請人</span>
-                  <input
-                    type="text"
-                    placeholder="輸入姓名"
-                    value={newTicketForm.applicantName}
-                    onChange={(event) =>
-                      handleNewTicketChange("applicantName", event.target.value)
-                    }
-                    required
-                  />
-                </label>
-                <label>
-                  <span>職類</span>
-                  <select
-                    value={newTicketForm.roleType}
-                    onChange={(event) =>
-                      handleNewTicketChange("roleType", event.target.value)
-                    }
-                    required
-                  >
-                    <option value="">請選擇</option>
-                    <option value="護理">護理</option>
-                    <option value="內科">內科</option>
-                  </select>
-                </label>
-                <label>
-                  <span>分機</span>
-                  <input
-                    type="text"
-                    placeholder="輸入分機"
-                    value={newTicketForm.ext}
-                    onChange={(event) =>
-                      handleNewTicketChange("ext", event.target.value)
-                    }
-                    required
-                  />
-                </label>
+                <div className="form-grid two-col">
+                  <label>
+                    <span>申請單位</span>
+                    <input
+                      type="text"
+                      value={newTicketForm.unit}
+                      disabled
+                      className="field-locked"
+                      required
+                    />
+                  </label>
+                  <label>
+                    <span>申請人</span>
+                    <select
+                      value={newTicketForm.applicantName}
+                      onChange={(event) =>
+                        handleNewTicketChange(
+                          "applicantName",
+                          event.target.value
+                        )
+                      }
+                      required
+                    >
+                      <option value="">請選擇</option>
+                      {applicantOptions.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>職類</span>
+                    <input
+                      type="text"
+                      value={newTicketForm.roleType}
+                      disabled
+                      className="field-locked"
+                      required
+                    />
+                  </label>
+                  <label>
+                    <span>分機</span>
+                    <input
+                      type="text"
+                      placeholder="輸入分機"
+                      value={newTicketForm.ext}
+                      onChange={(event) =>
+                        handleNewTicketChange("ext", event.target.value)
+                      }
+                      required
+                    />
+                  </label>
+                </div>
                 <label>
                   <span>主要用途</span>
                   <select
@@ -847,6 +1242,91 @@ export default function DashboardPage() {
                     <option value="平面設計">平面設計</option>
                   </select>
                 </label>
+                {newTicketForm.category === "海報輸出" ? (
+                  <div className="form-grid two-col">
+                    <label>
+                      <span>海報尺寸</span>
+                      <select
+                        value={newTicketForm.posterSize}
+                        onChange={(event) =>
+                          handleNewTicketChange(
+                            "posterSize",
+                            event.target.value
+                          )
+                        }
+                      >
+                        <option value="">請選擇</option>
+                        <option value="A0">A0</option>
+                        <option value="A1">A1</option>
+                        <option value="A2">A2</option>
+                        <option value="A3">A3</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>自訂尺寸</span>
+                      <input
+                        type="text"
+                        placeholder="例如 90x120cm"
+                        value={newTicketForm.posterCustomSize}
+                        onChange={(event) =>
+                          handleNewTicketChange(
+                            "posterCustomSize",
+                            event.target.value
+                          )
+                        }
+                      />
+                    </label>
+                  </div>
+                ) : null}
+                {newTicketForm.category === "平面設計" ? (
+                  <label>
+                    <span>成品尺寸</span>
+                    <input
+                      type="text"
+                      placeholder="例如 名片小卡、A1 海報、A4 書刊封面"
+                      value={newTicketForm.flatSize}
+                      onChange={(event) =>
+                        handleNewTicketChange("flatSize", event.target.value)
+                      }
+                    />
+                  </label>
+                ) : null}
+                {role === "lead" && editingTicketId ? (
+                  <div className="form-grid two-col">
+                    <label>
+                      <span>狀態</span>
+                      <select
+                        value={newTicketForm.status}
+                        onChange={(event) =>
+                          handleNewTicketChange("status", event.target.value)
+                        }
+                      >
+                        <option value="PENDING">待確認</option>
+                        <option value="IN_PROGRESS">製作中</option>
+                        <option value="PROOFING">校稿中</option>
+                        <option value="WAITING_REPLY">待回覆</option>
+                        <option value="DONE">已完成</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>指派設計師</span>
+                      <select
+                        value={newTicketForm.assignedToName}
+                        onChange={(event) =>
+                          handleNewTicketChange(
+                            "assignedToName",
+                            event.target.value
+                          )
+                        }
+                      >
+                        <option value="">未指派</option>
+                        <option value="設計師 蔡OO">設計師 蔡OO</option>
+                        <option value="設計師 李OO">設計師 李OO</option>
+                        <option value="設計師 黃OO">設計師 黃OO</option>
+                      </select>
+                    </label>
+                  </div>
+                ) : null}
                 <label className="wide">
                   <span>內容說明</span>
                   <textarea
@@ -859,6 +1339,13 @@ export default function DashboardPage() {
                   />
                 </label>
                 <div className="form-actions">
+                  <button
+                    className="ghost-btn"
+                    type="button"
+                    onClick={handleAutoFill}
+                  >
+                    自動填入
+                  </button>
                   <button
                     className="ghost-btn"
                     type="button"
@@ -910,13 +1397,10 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {role === "media-a" ||
-        role === "media-b" ||
-        role === "media-c" ||
-        role === "lead" ? (
+        {role === "media-a" || role === "media-b" || role === "media-c" ? (
           <section className="panel">
             <div className="panel-head">
-              <h3>多媒體組待製作清單</h3>
+              <h3>處理中案件</h3>
               <span className="panel-note">
                 {isLoading ? (
                   <>
@@ -928,174 +1412,38 @@ export default function DashboardPage() {
                 )}
               </span>
             </div>
-            <div className="case-list">
-              {(role === "lead" ? leadTodoTickets : scopedTickets)
-                .slice(0, 6)
-                .map((ticket) => {
-                const draftStatus = statusDrafts[ticket.id] ?? ticket.status;
-                const draftAssignee =
-                  assigneeDrafts[ticket.id] ?? ticket.assignedToName ?? "";
-                const hasChanges =
-                  draftStatus !== ticket.status ||
-                  draftAssignee !== (ticket.assignedToName ?? "");
-                const updated = updatedFlags[ticket.id];
-                const isPendingApproval = ticket.status === "PENDING";
-                const isBusy = busyItems[ticket.id];
-
-                return (
-                <details
-                  key={ticket.id}
-                  className="case-item"
-                  data-status={statusLabels[ticket.status] || ticket.status}
-                >
-                  <summary className="case-summary">
-                    <div>
-                      <p className="item-title">
-                        {ticket.code}｜{ticket.category}
-                      </p>
-                      <p className="item-note">
-                        {ticket.unit}｜{ticket.purpose}
-                      </p>
-                    </div>
-                    {role === "lead" ||
-                    role === "media-a" ||
-                    role === "media-b" ||
-                    role === "media-c" ? (
-                      <div className="status-control">
-                        <select
-                          className="status-select"
-                          value={draftStatus}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={(event) =>
-                            handleStatusDraft(ticket.id, event.target.value)
-                          }
-                          disabled={isPendingApproval || isBusy}
-                          title={isPendingApproval ? "待審核不能指派" : ""}
-                        >
-                          <option value="PENDING">待確認</option>
-                          <option value="IN_PROGRESS">製作中</option>
-                          <option value="PROOFING">校稿中</option>
-                          <option value="WAITING_REPLY">待回覆</option>
-                          <option value="DONE">已完成</option>
-                        </select>
-                        <button
-                          className="status-confirm"
-                          type="button"
-                          disabled={isPendingApproval || isBusy}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleApplyWithBusy(ticket.id);
-                          }}
-                          title={isPendingApproval ? "待審核不能指派" : ""}
-                        >
-                          {isBusy ? (
-                            <>
-                              <span className="inline-spinner" />
-                              更新中
-                            </>
-                          ) : updated ? (
-                            "已更新"
-                          ) : (
-                            "確認"
-                          )}
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="status-badge">
-                        {statusLabels[ticket.status] || ticket.status}
-                      </span>
-                    )}
-                    {role === "lead" ? (
-                      <div className="assign-control">
-                        <select
-                          className="assign-select"
-                          value={draftAssignee}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={(event) =>
-                            handleAssigneeDraft(ticket.id, event.target.value)
-                          }
-                          disabled={isPendingApproval || isBusy}
-                          title={isPendingApproval ? "待審核不能指派" : ""}
-                        >
-                          <option value="">未指派</option>
-                          <option value="設計師 蔡OO">設計師 蔡OO</option>
-                          <option value="設計師 李OO">設計師 李OO</option>
-                          <option value="設計師 黃OO">設計師 黃OO</option>
-                        </select>
-                        <button
-                          className="ghost-btn assign-btn"
-                          type="button"
-                          disabled={isPendingApproval || isBusy}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleApplyWithBusy(ticket.id);
-                          }}
-                          title={isPendingApproval ? "待審核不能指派" : ""}
-                        >
-                          {isBusy ? (
-                            <>
-                              <span className="inline-spinner" />
-                              指派中
-                            </>
-                          ) : (
-                            "指派設計師"
-                          )}
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="assign-badge">
-                        {getAssigneeLabel(ticket)}
-                      </span>
-                    )}
-                    {isPendingApproval ? (
-                      <span className="status-badge">待審核</span>
-                    ) : null}
-                  </summary>
-                  <div className="case-detail">
-                    <div className="detail-grid">
-                      <div>
-                        <p className="detail-label">申請單位</p>
-                        <p className="detail-value">{ticket.unit}</p>
-                      </div>
-                      <div>
-                        <p className="detail-label">申請人</p>
-                        <p className="detail-value">{ticket.applicantName}</p>
-                      </div>
-                      <div>
-                        <p className="detail-label">職類</p>
-                        <p className="detail-value">{ticket.roleType}</p>
-                      </div>
-                      <div>
-                        <p className="detail-label">分機</p>
-                        <p className="detail-value">{ticket.ext}</p>
-                      </div>
-                      <div>
-                        <p className="detail-label">指派設計師</p>
-                        <p className="detail-value">
-                          {getAssigneeLabel(ticket)}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="detail-note">
-                      <p className="detail-label">用途與內容</p>
-                      <p className="detail-value">
-                        {ticket.purpose}｜{ticket.category}
-                      </p>
-                    </div>
-                  </div>
-                </details>
-              );
-              })}
-            </div>
+            {renderMediaCaseList(scopedTickets)}
           </section>
+        ) : null}
+
+        {role === "lead" ? (
+          <div className="applicant-duo">
+            <section className="panel">
+              <div className="panel-head">
+                <h3>待派工</h3>
+                <span className="panel-note">待審核與待派工案件</span>
+              </div>
+              {renderMediaCaseList(leadAssignTickets, leadAssignTickets.length)}
+            </section>
+            <section className="panel">
+              <div className="panel-head">
+                <h3>處理中</h3>
+                <span className="panel-note">已指派製作中的案件</span>
+              </div>
+              {renderMediaCaseList(
+                leadInProgressTickets,
+                leadInProgressTickets.length
+              )}
+            </section>
+          </div>
         ) : null}
 
         {role === "applicant" || role === "applicant-int" ? (
           <div className="applicant-duo">
             <section className="panel">
               <div className="panel-head">
-                <h3>處理中清單</h3>
-                <span className="panel-note">已送出申請，處理中案件</span>
+                <h3>處理中</h3>
+                <span className="panel-note">已審核過，多媒體處理中的案件</span>
               </div>
               <div
                 className={`case-list capped-list${
@@ -1127,12 +1475,17 @@ export default function DashboardPage() {
                           <p className="detail-label">申請類別</p>
                           <p className="detail-value">{ticket.category}</p>
                         </div>
+                        <div>
+                          <p className="detail-label">成品尺寸</p>
+                          <p className="detail-value">{getSizeLabel(ticket)}</p>
+                        </div>
                       </div>
+                      {renderDescription(ticket)}
                     </div>
                   </details>
                 ))}
                 {applicantActiveTickets.length === 0 ? (
-                  <div className="empty-state">目前沒有處理中案件</div>
+                  <div className="empty-state">目前沒有製作中案件</div>
                 ) : null}
               </div>
               {applicantActiveTickets.length > 5 ? (
@@ -1148,8 +1501,8 @@ export default function DashboardPage() {
             </section>
             <section className="panel">
               <div className="panel-head">
-                <h3>待補件清單</h3>
-                <span className="panel-note">退回案件請補齊後送審</span>
+                <h3>待審核</h3>
+                <span className="panel-note">待審核案件請補齊後送審</span>
               </div>
               <div
                 className={`case-list capped-list${
@@ -1224,12 +1577,17 @@ export default function DashboardPage() {
                           <p className="detail-label">申請類別</p>
                           <p className="detail-value">{ticket.category}</p>
                         </div>
+                        <div>
+                          <p className="detail-label">成品尺寸</p>
+                          <p className="detail-value">{getSizeLabel(ticket)}</p>
+                        </div>
                       </div>
+                      {renderDescription(ticket)}
                     </div>
                   </details>
                 ))}
                 {applicantReturnTickets.length === 0 ? (
-                  <div className="empty-state">目前沒有退回案件</div>
+                  <div className="empty-state">目前沒有待審核案件</div>
                 ) : null}
               </div>
               {applicantReturnTickets.length > 5 ? (
@@ -1247,78 +1605,163 @@ export default function DashboardPage() {
         ) : null}
 
         {role === "approver" || role === "approver-int" ? (
-          <section className="panel">
-            <div className="panel-head">
-              <h3>待審核清單</h3>
-              <span className="panel-note">請確認後送出</span>
-            </div>
-            <div className="case-list">
-              {scopedTickets.slice(0, 4).map((ticket) => (
-                <details key={ticket.id} className="case-item">
-                  <summary className="case-summary">
-                    <div>
-                      <p className="item-title">
-                        {ticket.code}｜{ticket.category}
-                      </p>
-                      <p className="item-note">
-                        {ticket.unit}｜{ticket.applicantName}
-                      </p>
-                    </div>
-                    <div className="action-group">
-                      <button
+          <div className="applicant-duo">
+            <section className="panel">
+              <div className="panel-head">
+                <h3>待審核</h3>
+                <span className="panel-note">請確認後送出</span>
+              </div>
+              <div
+                className={`case-list capped-list${
+                  isApproverPendingExpanded ? " expanded" : ""
+                }`}
+              >
+                {scopedTickets.map((ticket) => (
+                  <details key={ticket.id} className="case-item">
+                    <summary className="case-summary">
+                      <div>
+                        <p className="item-title">
+                          {ticket.code}｜{ticket.category}
+                        </p>
+                        <p className="item-note">
+                          {ticket.unit}｜{ticket.applicantName}
+                        </p>
+                      </div>
+                      <div className="action-group">
+                        <button
                         className="ghost-btn"
                         type="button"
                         disabled={busyItems[ticket.id]}
                         onClick={(event) => {
                           event.stopPropagation();
-                          handleApproval(ticket.id, "WAITING_REPLY");
+                          handleApprovalConfirm(ticket.id, "WAITING_REPLY");
                         }}
                       >
-                        {busyItems[ticket.id] ? (
-                          <>
-                            <span className="inline-spinner" />
-                            處理中
-                          </>
-                        ) : (
-                          "退回"
-                        )}
-                      </button>
-                      <button
+                          {busyItems[ticket.id] ? (
+                            <>
+                              <span className="inline-spinner" />
+                              處理中
+                            </>
+                          ) : (
+                            "退回"
+                          )}
+                        </button>
+                        <button
                         className="primary-btn"
                         type="button"
                         disabled={busyItems[ticket.id]}
                         onClick={(event) => {
                           event.stopPropagation();
-                          handleApproval(ticket.id, "IN_PROGRESS");
+                          handleApprovalConfirm(ticket.id, "IN_PROGRESS");
                         }}
                       >
-                        {busyItems[ticket.id] ? (
-                          <>
-                            <span className="inline-spinner" />
-                            處理中
-                          </>
-                        ) : (
-                          "核准"
-                        )}
-                      </button>
-                    </div>
-                  </summary>
-                  <div className="case-detail">
-                    <div className="detail-grid">
-                      <div>
-                        <p className="detail-label">主要用途</p>
-                        <p className="detail-value">{ticket.purpose}</p>
+                          {busyItems[ticket.id] ? (
+                            <>
+                              <span className="inline-spinner" />
+                              處理中
+                            </>
+                          ) : (
+                            "核准"
+                          )}
+                        </button>
                       </div>
-                      <div>
-                        <p className="detail-label">申請類別</p>
-                        <p className="detail-value">{ticket.category}</p>
+                    </summary>
+                    <div className="case-detail">
+                      <div className="detail-grid">
+                        <div>
+                          <p className="detail-label">主要用途</p>
+                          <p className="detail-value">{ticket.purpose}</p>
+                        </div>
+                        <div>
+                          <p className="detail-label">申請類別</p>
+                          <p className="detail-value">{ticket.category}</p>
+                        </div>
+                        <div>
+                          <p className="detail-label">成品尺寸</p>
+                          <p className="detail-value">{getSizeLabel(ticket)}</p>
+                        </div>
                       </div>
+                      {renderDescription(ticket)}
                     </div>
-                  </div>
-                </details>
-              ))}
-            </div>
-          </section>
+                  </details>
+                ))}
+                {scopedTickets.length === 0 ? (
+                  <div className="empty-state">目前沒有待審核案件</div>
+                ) : null}
+              </div>
+              {scopedTickets.length > 5 ? (
+                <button
+                  className="ghost-btn mobile-toggle"
+                  type="button"
+                  onClick={() =>
+                    setIsApproverPendingExpanded((prev) => !prev)
+                  }
+                  aria-expanded={isApproverPendingExpanded}
+                >
+                  {isApproverPendingExpanded ? "收合" : "展開全部"} ▼
+                </button>
+              ) : null}
+            </section>
+            <section className="panel">
+              <div className="panel-head">
+                <h3>處理中</h3>
+                <span className="panel-note">已核准並處理中案件</span>
+              </div>
+              <div
+                className={`case-list capped-list${
+                  isApproverActiveExpanded ? " expanded" : ""
+                }`}
+              >
+                {approverActiveTickets.map((ticket) => (
+                  <details key={ticket.id} className="case-item">
+                    <summary className="case-summary">
+                      <div>
+                        <p className="item-title">
+                          {ticket.code}｜{ticket.category}
+                        </p>
+                        <p className="item-note">
+                          {ticket.unit}｜{ticket.applicantName}
+                        </p>
+                      </div>
+                      <span className="status-badge">
+                        {statusLabels[ticket.status] || ticket.status}
+                      </span>
+                    </summary>
+                    <div className="case-detail">
+                      <div className="detail-grid">
+                        <div>
+                          <p className="detail-label">主要用途</p>
+                          <p className="detail-value">{ticket.purpose}</p>
+                        </div>
+                        <div>
+                          <p className="detail-label">申請類別</p>
+                          <p className="detail-value">{ticket.category}</p>
+                        </div>
+                        <div>
+                          <p className="detail-label">成品尺寸</p>
+                          <p className="detail-value">{getSizeLabel(ticket)}</p>
+                        </div>
+                      </div>
+                      {renderDescription(ticket)}
+                    </div>
+                  </details>
+                ))}
+                {approverActiveTickets.length === 0 ? (
+                  <div className="empty-state">目前沒有製作中案件</div>
+                ) : null}
+              </div>
+              {approverActiveTickets.length > 5 ? (
+                <button
+                  className="ghost-btn mobile-toggle"
+                  type="button"
+                  onClick={() => setIsApproverActiveExpanded((prev) => !prev)}
+                  aria-expanded={isApproverActiveExpanded}
+                >
+                  {isApproverActiveExpanded ? "收合" : "展開全部"} ▼
+                </button>
+              ) : null}
+            </section>
+          </div>
         ) : null}
 
         <section className="panel">
@@ -1406,13 +1849,14 @@ export default function DashboardPage() {
                     <td>{ticket.ext}</td>
                     <td>{ticket.purpose}</td>
                     <td>{ticket.category}</td>
+                    <td>{getSizeLabel(ticket)}</td>
                     <td>{statusLabels[ticket.status] || ticket.status}</td>
                     <td>{getAssigneeLabel(ticket)}</td>
                   </tr>
                 ))}
                 {allSortedTickets.length === 0 ? (
                   <tr>
-                    <td colSpan={9}>無符合條件的案件</td>
+                    <td colSpan={10}>無符合條件的案件</td>
                   </tr>
                 ) : null}
               </tbody>
